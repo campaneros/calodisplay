@@ -115,6 +115,21 @@ gdmltoroot("../data/ALLEGRO_o1_v03_noDCHcells.gdml","../data/ALLEGRO_o1_v03_noDC
 ```
 - for allegro_o1_v03, I had to remove from the gdml all DCH cells since they use a volume (G4TwistedTube) not available in ROOT. Note that the latest version (July 2026) uses a very detailed model of the vertex detector that is making the rendering pretty slow, so consider hiding the elements/show the envelope only/..
 
+### Alternative ECAL barrel readout geometries
+The ECAL barrel readout layout (11 layers of ALLEGRO o1_v03, with their theta and module merging) is hard-coded in `DetectorGeometry::calcGeom`. A readout design with layers merged in depth (e.g. physical layers 2 and 3 read out as a single cell) can be drawn by setting three environment variables before starting calodisplay:
+- `CALODISPLAY_ECAL_GROUPS`: the physical layers (0 = presampler, ..., 10) read out by each readout layer, readout layers separated by `|`, physical layers of the same readout layer by `,`. The radial thickness of each readout layer is the sum of the nominal thicknesses of its physical layers, so the layer boundaries stay those of the physical layers and the outer radius does not change.
+- `CALODISPLAY_ECAL_THETA`: the number of fine theta bins merged in each readout layer, separated by spaces.
+- `CALODISPLAY_ECAL_MODULES`: the number of modules merged in each readout layer, separated by spaces.
+
+E.g. for a design with layers 2+3, 7+8 and 9+10 merged (8 readout layers):
+```
+CALODISPLAY_ECAL_GROUPS="0|1|2,3|4|5|6|7,8|9,10" \
+CALODISPLAY_ECAL_THETA="4 1 1 4 4 4 4 4" \
+CALODISPLAY_ECAL_MODULES="2 2 2 2 2 2 2 2" \
+./calodisplay ...
+```
+Only the drawn geometry changes: the radii, theta width and phi width of the cells of each layer, the layer cylinders and the readout grids. The cellID (layer, module and theta bin), energy and position of each cell are read from the event file, which must have been reconstructed with the same readout (the layer field of the cellID is the readout layer). Without `CALODISPLAY_ECAL_GROUPS` the default layout is used and the other two variables are ignored. `config_design.json` is an example configuration for these displays (ECAL barrel cells, barrel sliding-window clusters and generated particles only).
+
 
 ## Code structure
 The package is organised in the following subdirectories:
