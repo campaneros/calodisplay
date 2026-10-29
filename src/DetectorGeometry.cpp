@@ -6,6 +6,8 @@
 //
 /******************************************************************************/
 
+#include <sstream>
+#include <cstdlib>
 #include "DetectorGeometry.h"
 
 #include <iostream>
@@ -84,9 +86,29 @@ void DetectorGeometry::calcGeom(int version) {
       3.92*cm, 4.05*cm, 4.20*cm, 4.35*cm, 4.52*cm
     });
   }
+  // local patch: readout design with layers merged in depth, e.g. S23M
+  //   CALODISPLAY_ECAL_GROUPS="0|1|2,3|4|5|6|7,8|9,10" (physical layers summed per readout layer)
+  //   CALODISPLAY_ECAL_THETA="4 1 1 4 4 4 4 4"  CALODISPLAY_ECAL_MODULES="2 2 2 2 2 2 2 2"
+  if (const char* g = getenv("CALODISPLAY_ECAL_GROUPS")) {
+    std::vector<double> dr;
+    std::stringstream sg(g);
+    std::string grp;
+    while (std::getline(sg, grp, '|')) {
+      double sum = 0.;
+      std::stringstream sl(grp);
+      std::string l;
+      while (std::getline(sl, l, ',')) sum += drNom.at(std::stoi(l));
+      dr.push_back(sum);
+    }
+    drNom = dr;
+    auto ints = [](const char* s) { std::vector<int> v; std::stringstream ss(s); int x; while (ss >> x) v.push_back(x); return v; };
+    if (const char* t = getenv("CALODISPLAY_ECAL_THETA")) mergedCells_Theta = ints(t);
+    if (const char* m = getenv("CALODISPLAY_ECAL_MODULES")) mergedModules = ints(m);
+    cout << "ECAL barrel readout design from CALODISPLAY_ECAL_GROUPS = " << g << endl;
+  }
   phiMin = -alpha - gridPhi/2.0;
 
-  nLayers = drNom.size();  
+  nLayers = drNom.size();
 
   // print initial information
   cout << "r(min) = " << rMin << " " << units << endl;
