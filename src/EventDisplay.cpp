@@ -14,6 +14,8 @@
 #include "CylField.h"
 #include "Units.h"
 #include "PathUtils.h"
+// (generated in build/ by scripts/geometry_code_version.sh)
+#include "GeometryCodeVersion.h"
 
 // ROOT core
 #include <TMath.h>
@@ -97,9 +99,10 @@ int ecalEndcapRhoZBin(ULong_t cellID, float y)
   return (bin * 2 + (DetectorGeometry::ECalEndCapSide(cellID) > 0)) * 2 + (y > 0);
 }
 
-// the code that decides which volumes of the G4 geometry are drawn is in this
-// file: the geometry cache is rebuilt when it is recompiled
-const std::string geometryCodeVersion = __DATE__ " " __TIME__;
+// version of the code that decides which volumes of the G4 geometry are drawn
+// (a hash of the functions listed in scripts/geometry_code_version.sh): the
+// geometry caches written by the other versions are rebuilt
+const std::string geometryCodeVersion = GEOMETRY_CODE_VERSION;
 
 // vertical legend of a palette, with the axis on the right of the colour bar,
 // on a semi-transparent dark background so that it can be read on top of the
@@ -984,6 +987,9 @@ void EventDisplay::drawTracks()
       // trkProp->SetMaxZ(geomReader->zMaxEndCap);
       // trkProp->SetMaxZ(10000.*mm);
       trkProp->SetRnrReferences(true);
+      // the path marks of the track states in white (not to be confused with
+      // the yellow digis of the tracker around them)
+      trkProp->RefPMAtt().SetMarkerColor(kWhite);
       // trkProp->SetFitReferences(true);
       tracks->SetMainColor(kCyan);
       tracks->SetLineWidth(2.);
@@ -1013,10 +1019,7 @@ void EventDisplay::drawTracks()
       unsigned int trackStates_end = (*eventReader->tracks.trackStates_end)[ip];
       if (debug) std::cout << "  trackStates begin , end = " << trackStates_begin << " , " << trackStates_end << std::endl;
       // store in vectors the track state positions and momenta
-      unsigned int nTrackStates = 0;
-      if (trackStates_end > trackStates_begin)
-        nTrackStates = trackStates_end - trackStates_begin;
-      float x[5], y[5], z[5], omega[5], tanLambda[5], phi[5];
+      float x[5], y[5], z[5], omega[5], tanLambda[5], phi[5], d0[5], z0[5];
       for (unsigned int i=0; i<5; i++) x[i]=-1e9; // set to some large value to check later if track state has been filled
       for (unsigned int its = trackStates_begin; its < trackStates_end; its++) {
         int location = (*eventReader->tracks.trackState_location)[its];
@@ -1024,13 +1027,20 @@ void EventDisplay::drawTracks()
           std::cout << "Trackstate " << its << std::endl;
           std::cout << "  location = " << location << std::endl;
         }
-        if (location>4) continue;
+        if (location < 0 || location > 4) continue;
         x[location] = (*eventReader->tracks.trackState_referencePoint_x)[its];
         y[location] = (*eventReader->tracks.trackState_referencePoint_y)[its];
         z[location] = (*eventReader->tracks.trackState_referencePoint_z)[its];
         omega[location] = (*eventReader->tracks.trackState_omega)[its];
         tanLambda[location] = (*eventReader->tracks.trackState_tanLambda)[its];
         phi[location] = (*eventReader->tracks.trackState_phi)[its];
+        d0[location] = (*eventReader->tracks.trackState_d0)[its];
+        z0[location] = (*eventReader->tracks.trackState_z0)[its];
+        // the position of the track state: the point of closest approach to
+        // the reference point, displaced from it by d0 and z0
+        x[location] -= d0[location] * std::sin(phi[location]);
+        y[location] += d0[location] * std::cos(phi[location]);
+        z[location] += z0[location];
         if (debug) {
           std::cout << "  x = " << x[location] << std::endl;
           std::cout << "  y = " << y[location] << std::endl;
@@ -1039,6 +1049,8 @@ void EventDisplay::drawTracks()
           std::cout << "  omega = " << omega[location] << std::endl;
           std::cout << "  phi = " << phi[location] << std::endl;
           std::cout << "  tanLambda = " << tanLambda[location] << std::endl;
+          std::cout << "  d0 = " << d0[location] << std::endl;
+          std::cout << "  z0 = " << z0[location] << std::endl;
           float radius = 1.f / std::fabs(omega[location]);
           float pxy = FCT * bField * radius;
           float pz = tanLambda[location] * pxy;
@@ -1052,14 +1064,29 @@ void EventDisplay::drawTracks()
       unsigned int hits_begin = (*eventReader->tracks.subdetectorHitNumbers_begin)[ip];
       unsigned int hits_end = (*eventReader->tracks.subdetectorHitNumbers_end)[ip];
       if (debug) std::cout << "  subdetectorHitNumbers_begin , end = " << hits_begin << " , " << hits_end << std::endl;
-      for (unsigned int ih = hits_begin; ih < hits_end; ih++) {
+      // (only the first nSubDetectors numbers are shown)
+      for (unsigned int ih = hits_begin; ih < hits_end && ih - hits_begin < nSubDetectors; ih++) {
         nhits[ih-hits_begin] = (*eventReader->tracks.subdetectorHitNumbers)[ih];
       }
 
       // const int tsOrig=2; // which track state to use for track origin: 0=at other, 1=at IP, 2=at first hit, 3=at last hit, 4=at ECAL
-      const int tsOrig=1; // which track state to use for track origin: 0=at other, 1=at IP, 2=at first hit, 3=at last hit, 4=at ECAL
-      //if (x[tsOrig]<5e5) {  // GM dont remember what is this about..
-      if (nTrackStates > 0) {
+      int tsOrig=1; // which track state to use for track origin: 0=at other, 1=at IP, 2=at first hit, 3=at last hit, 4=at ECAL
+      // if the track has no state there, use the first one found along the
+      // track (at first hit, at last hit, at ECAL, at other)
+      if (x[tsOrig] < -1e8) {
+        tsOrig = -1;
+        for (int i : {2, 3, 4, 0}) {
+          if (x[i] > -1e8) {
+            tsOrig = i;
+            break;
+          }
+        }
+        if (tsOrig < 0)
+          std::cout << "WARNING: track " << ip << " has no valid track state, it is not drawn" << std::endl;
+        else if (debug)
+          std::cout << "  no track state at IP, origin at location " << tsOrig << std::endl;
+      }
+      if (tsOrig >= 0) {
         TEveRecTrack t;
         float x1 = x[tsOrig]*mm;
         float y1 = y[tsOrig]*mm;
@@ -1463,6 +1490,8 @@ void EventDisplay::drawClusters(ClusterSet &set)
     // HCAL: layer-theta for rho-z, layer-phi for rho-phi
     // ECAL endcap: z bin (the layer) and rho bin for rho-z, not drawn in rho-phi and 3D
     // HCAL endcap: layer-theta for rho-z, not drawn in rho-phi
+    // (in rho-z also the sign of y, as the cells above and below the beam
+    // axis are drawn separately)
     float r_in(0.), r_out(0.);
     int layer(0), thetaID(0), moduleID(0), phiID(0);
     ProjectedCellKey rhophiID{}, rhozID{};
@@ -1473,8 +1502,13 @@ void EventDisplay::drawClusters(ClusterSet &set)
       layer = (int)DetectorGeometry::ECalBarrelLayer(cellID);
       thetaID = (int)DetectorGeometry::ECalBarrelThetaBin(cellID);
       moduleID = (int)DetectorGeometry::ECalBarrelModule(cellID);
+      if (layer < 0 || layer >= geomReader->nLayers)
+      {
+        std::cout << "WARNING: layer " << layer << " of system " << systemID << " out of range [0, " << geomReader->nLayers << "), skipping cell" << std::endl;
+        continue;
+      }
       rhophiID = {systemID, icl, layer, moduleID};
-      rhozID = {systemID, icl, layer, thetaID};
+      rhozID = {systemID, icl, layer, thetaID * 2 + (y_center > 0)};
       r_in = geomReader->r[layer];
       r_out = geomReader->r[layer + 1];
     }
@@ -1483,8 +1517,13 @@ void EventDisplay::drawClusters(ClusterSet &set)
       layer = (int)DetectorGeometry::HCalBarrelLayer(cellID);
       thetaID = (int)DetectorGeometry::HCalBarrelThetaBin(cellID);
       phiID = (int)DetectorGeometry::HCalBarrelPhiBin(cellID);
+      if (layer < 0 || layer >= geomReader->nLayersHCal)
+      {
+        std::cout << "WARNING: layer " << layer << " of system " << systemID << " out of range [0, " << geomReader->nLayersHCal << "), skipping cell" << std::endl;
+        continue;
+      }
       rhophiID = {systemID, icl, layer, phiID};
-      rhozID = {systemID, icl, layer, thetaID};
+      rhozID = {systemID, icl, layer, thetaID * 2 + (y_center > 0)};
       r_in = geomReader->rHCal[layer];
       r_out = geomReader->rHCal[layer + 1];
     }
@@ -1498,7 +1537,6 @@ void EventDisplay::drawClusters(ClusterSet &set)
     {
       layer = (int)DetectorGeometry::HCalEndCapLayer(cellID);
       thetaID = (int)DetectorGeometry::HCalEndCapThetaBin(cellID);
-      // (the theta bin distinguishes the two sides, not above and below the beam axis)
       rhozID = {systemID, icl, layer, thetaID * 2 + (y_center > 0)};
       inRhoPhi = false;
     }
@@ -1700,7 +1738,7 @@ void EventDisplay::drawClusters(ClusterSet &set)
     {
       layer = (int)DetectorGeometry::ECalBarrelLayer(cellID);
       thetaID = (int)DetectorGeometry::ECalBarrelThetaBin(cellID);
-      rhozID = {system, icl, layer, thetaID};
+      rhozID = {system, icl, layer, thetaID * 2 + (cells.y[i] > 0)};
       r_in = geomReader->r[layer];
       r_out = geomReader->r[layer + 1];
     }
@@ -1708,7 +1746,7 @@ void EventDisplay::drawClusters(ClusterSet &set)
     {
       layer = (int)DetectorGeometry::HCalBarrelLayer(cellID);
       thetaID = (int)DetectorGeometry::HCalBarrelThetaBin(cellID);
-      rhozID = {system, icl, layer, thetaID};
+      rhozID = {system, icl, layer, thetaID * 2 + (cells.y[i] > 0)};
       r_in = geomReader->rHCal[layer];
       r_out = geomReader->rHCal[layer + 1];
     }
@@ -2026,17 +2064,24 @@ void EventDisplay::startDisplay(int initialEvent)
     return;
 
   // create the projections; the geometry is projected when they are first
-  // shown, but it is needed now to write the geometry cache
+  // shown, but it is needed now to write the geometry cache (see below)
   createRhoPhiView();
   createRhoZView();
+
+  gEve->DoRedraw3D();
+  gEve->FullRedraw3D(true);
+
+  // set the 3D view as the active tab, rotate the camera and set the clipping
+  // (after the first drawing, which sets the camera from the bounding box of
+  // the scene), so that the final 3D view is shown also while the
+  // projections below are computed
+  setInitialCamera();
+
   if (geometryExtract)
   {
     buildRhoPhiProjection();
     buildRhoZProjection();
   }
-
-  gEve->DoRedraw3D();
-  gEve->FullRedraw3D(true);
 
   // write the geometry cache, now that the volumes that can be drawn are known
   writeGeometryCache();
@@ -2064,9 +2109,6 @@ void EventDisplay::startDisplay(int initialEvent)
 
   // legends of the cluster cell energies
   addPaletteLegends();
-
-  // Set the 3D view as the active tab, rotate the camera and set the clipping
-  setInitialCamera();
 }
 
 void EventDisplay::readConfiguration()
@@ -2814,6 +2856,24 @@ void EventDisplay::drawRhoPhiReadout()
     rhoPhiScene->AddElement(hcalPhiReadout);
     readout->AddElement(hcalPhiReadout);
   }
+
+  // the muon tagger readout in the barrel (with the full detector, where it is
+  // drawn): the edges of the phi bins
+  if (showFullDetector)
+  {
+    TEveStraightLineSet *muonPhiReadout = new TEveStraightLineSet("Muon tagger phi readout");
+    muonPhiReadout->SetLineColor(kViolet);
+    const double r1 = geomReader->rMinMuonBarrel;
+    const double r2 = geomReader->rMaxMuonBarrel;
+    const double gridPhi = TMath::TwoPi() / geomReader->nPhiBinsMuon;
+    for (int i = 0; i < geomReader->nPhiBinsMuon; i++)
+    {
+      const double phi = geomReader->phiOffsetMuon + (i - 0.5) * gridPhi;
+      muonPhiReadout->AddLine(r1 * cos(phi), r1 * sin(phi), 0., r2 * cos(phi), r2 * sin(phi), 0.);
+    }
+    rhoPhiScene->AddElement(muonPhiReadout);
+    readout->AddElement(muonPhiReadout);
+  }
 }
 
 void EventDisplay::createRhoZView()
@@ -3121,6 +3181,7 @@ void EventDisplay::drawRhoZReadout()
   readout->AddElement(grid);
   // by default we do not show the unmerged readout
   grid->SetRnrSelf(false);
+  readoutsHiddenByDefault.insert(grid);
 
   // the merged grid
   TEveStraightLineSet *grid2 = new TEveStraightLineSet("ECAL theta readout merged");
@@ -3195,6 +3256,45 @@ void EventDisplay::drawRhoZReadout()
     }
     rhoZScene->AddElement(ecalEndcapGrid);
     readout->AddElement(ecalEndcapGrid);
+  }
+
+  // the muon tagger readout (with the full detector, where it is drawn): the
+  // edges of the theta bins, in the barrel and in the endcaps
+  if (showFullDetector)
+  {
+    TEveStraightLineSet *muonGrid = new TEveStraightLineSet("Muon tagger theta readout");
+    muonGrid->SetLineColor(kViolet);
+    // the segment of the line at theta, from the origin, with rho in
+    // [rhoMin, rhoMax] and |z| in [zMin, zMax], above and below the beam axis
+    auto addSegment = [muonGrid](double theta, double rhoMin, double rhoMax, double zMin, double zMax) {
+      const double s = std::sin(theta), c = std::fabs(std::cos(theta));
+      // the distance from the origin along the line
+      double tMin = rhoMin / s, tMax = rhoMax / s;
+      if (c > 0.)
+      {
+        tMin = std::max(tMin, zMin / c);
+        tMax = std::min(tMax, zMax / c);
+      }
+      else if (zMin > 0.)
+        return;
+      if (tMin >= tMax)
+        return;
+      for (double sign : {-1., 1.})
+        muonGrid->AddLine(tMin * std::cos(theta), sign * tMin * s, 0., tMax * std::cos(theta), sign * tMax * s, 0.);
+    };
+    for (int i = 0;; i++)
+    {
+      const double theta = geomReader->thetaOffsetMuon + (i - 0.5) * geomReader->thetaGridMuon;
+      if (theta >= TMath::Pi())
+        break;
+      if (theta <= 0.)
+        continue;
+      addSegment(theta, geomReader->rMinMuonBarrel, geomReader->rMaxMuonBarrel, 0., geomReader->zMaxMuonBarrel);
+      addSegment(theta, geomReader->rMinMuonEndcap, geomReader->rMaxMuonEndcap,
+                 geomReader->zMinMuonEndcap, geomReader->zMaxMuonEndcap);
+    }
+    rhoZScene->AddElement(muonGrid);
+    readout->AddElement(muonGrid);
   }
 
   // draw the HCAL readout segmentation in eta or theta (rho-z view)
@@ -3474,7 +3574,7 @@ void EventDisplay::toggleReadout()
   readout->SetRnrSelfChildren(showReadout, showReadout);
   for (TEveElement::List_i itr = readout->BeginChildren(); itr != readout->EndChildren(); itr++) {
     TEveElement *el = *itr;
-    el->SetRnrSelf(showReadout);
+    el->SetRnrSelf(showReadout && readoutsHiddenByDefault.count(el) == 0);
   }
   updateToggleButtons();
   // update now the scenes with the changed elements (faster than a full
